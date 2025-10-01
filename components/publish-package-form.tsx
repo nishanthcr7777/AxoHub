@@ -1,0 +1,436 @@
+"use client"
+
+import { motion } from "framer-motion"
+import { useState } from "react"
+import { Card } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Badge } from "@/components/ui/badge"
+import { FileUpload } from "@/components/file-upload"
+import { SuccessModal } from "@/components/success-modal"
+import { useWallet } from "@/hooks/use-wallet"
+import { wagmiConfig } from "@/lib/web3modal"
+import { packageRegistryAbi } from "@/lib/abis/package-registry"
+import { PACKAGE_REGISTRY_ADDRESSES } from "@/lib/contracts/package-registry"
+import { useToast } from "@/hooks/use-toast"
+import { writeContract, waitForTransactionReceipt } from "wagmi/actions"
+import { ClientOnly } from "@/components/client-only"
+import { isAddress } from "viem"
+import { ipfsMock } from "@/lib/ipfs-mock"
+
+function PublishPackageFormInner() {
+  const [isPublishing, setIsPublishing] = useState(false)
+  const [showSuccess, setShowSuccess] = useState(false)
+  const [formData, setFormData] = useState({
+    contractAddress: "",
+    packageName: "",
+    version: "",
+    description: "",
+    abi: "",
+    metadata: null as File | null,
+    tags: [] as string[],
+    category: "",
+  })
+  const [newTag, setNewTag] = useState("")
+  const { isConnected, chainId, isWrongNetwork, switchToSepolia, isSwitchingNetwork } = useWallet()
+  const { toast } = useToast()
+  const [txHash, setTxHash] = useState<`0x${string}` | null>(null)
+
+  const updateFormData = (field: string, value: any) => {
+    setFormData((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const addTag = () => {
+    if (newTag.trim() && !formData.tags.includes(newTag.trim())) {
+      setFormData((prev) => ({
+        ...prev,
+        tags: [...prev.tags, newTag.trim()],
+      }))
+      setNewTag("")
+    }
+  }
+
+  const removeTag = (tagToRemove: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      tags: prev.tags.filter((tag) => tag !== tagToRemove),
+    }))
+  }
+
+  const handlePublish = async () => {
+    if (!isConnected) {
+      toast({
+        title: "Wallet not connected",
+        description: "Please connect your wallet to publish a package.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (isWrongNetwork) {
+      toast({
+        title: "Wrong network",
+        description: "Please switch to Sepolia before publishing.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Validate contract address if provided
+    if (formData.contractAddress && !isAddress(formData.contractAddress)) {
+      toast({
+        title: "Invalid contract address",
+        description: "Please enter a valid Ethereum address.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const address = PACKAGE_REGISTRY_ADDRESSES[chainId]
+    if (!address) {
+      toast({
+        title: "Unsupported network",
+        description: "Please switch to Sepolia to publish packages.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsPublishing(true)
+    setTxHash(null)
+
+    try {
+      // Resolve ABI CID
+      let ipfsAbiCid: string
+      const rawAbi = (formData.abi || "").trim()
+      if (rawAbi) {
+        let normalizedAbi = rawAbi
+        try {
+          // Validate and pretty-print if JSON
+          const parsed = JSON.parse(rawAbi)
+          normalizedAbi = JSON.stringify(parsed, null, 2)
+        } catch {
+          // leave as-is if it's not valid JSON; still store text
+        }
+        ipfsAbiCid = await ipfsMock.putText(normalizedAbi)
+      } else {
+        const exampleAbi = [
+          {
+            inputs: [],
+            name: `${(formData.packageName || "example").replace(/\s+/g, "_")}_ping`,
+            outputs: [{ internalType: "string", name: "", type: "string" }],
+            stateMutability: "pure",
+            type: "function",
+          },
+          {
+            inputs: [{ internalType: "address", name: "who", type: "address" }],
+            name: "greet",
+            outputs: [{ internalType: "string", name: "", type: "string" }],
+            stateMutability: "view",
+            type: "function",
+          },
+        ]
+        ipfsAbiCid = await ipfsMock.putObject(exampleAbi)
+      }
+
+      // Resolve Metadata CID
+      let ipfsMetadataCid: string
+      if (formData.metadata) {
+        ipfsMetadataCid = await ipfsMock.putFile(formData.metadata)
+      } else {
+        const exampleMetadata = {
+          name: formData.packageName || "Unnamed Package",
+          version: formData.version || "1.0.0",
+          description:
+            formData.description ||
+            "Auto-generated metadata. Replace with your own documentation, examples, and usage notes.",
+          tags: formData.tags || [],
+          category: formData.category || "Other",
+          createdAt: new Date().toISOString(),
+          note: "Generated by Somnia Dev Hub (mock IPFS).",
+        }
+        ipfsMetadataCid = await ipfsMock.putObject(exampleMetadata)
+      }
+
+      // Use zero address if no contract address provided (optional field)
+      const contractAddr = formData.contractAddress || "0x0000000000000000000000000000000000000000"
+
+      const hash = await writeContract(wagmiConfig, {
+        abi: packageRegistryAbi,
+        address,
+        functionName: "publishPackage",
+        args: [
+          formData.packageName || "Unnamed Package",
+          formData.version || "1.0.0",
+          contractAddr as `0x${string}`,
+          ipfsMetadataCid,
+          ipfsAbiCid,
+        ],
+      })
+      setTxHash(hash)
+
+      await waitForTransactionReceipt(wagmiConfig, { hash })
+
+      setIsPublishing(false)
+      setShowSuccess(true)
+    } catch (err: any) {
+      console.error("[v0] publishPackage error:", err?.message || err)
+      setIsPublishing(false)
+      toast({
+        title: "Transaction failed",
+        description: err?.shortMessage || err?.message || "Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  return (
+    <>
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
+        <Card className="p-8 bg-black/20 backdrop-blur-sm border-white/10 hover:border-purple-500/30 transition-all duration-300">
+          {isWrongNetwork && (
+            <div className="mb-6 flex items-center justify-between rounded-md border border-red-500/40 bg-red-500/10 p-3">
+              <div className="text-sm text-red-200">
+                You are connected to the wrong network. Please switch to Sepolia.
+              </div>
+              <Button
+                onClick={switchToSepolia}
+                variant="outline"
+                size="sm"
+                className="border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10 bg-transparent"
+                disabled={isSwitchingNetwork}
+              >
+                {isSwitchingNetwork ? "Switching…" : "Switch to Sepolia"}
+              </Button>
+            </div>
+          )}
+
+          <div className="space-y-8">
+            {/* Contract Information */}
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-2xl font-bold text-white mb-2">Package Information</h2>
+                <p className="text-slate-400">Provide details about your smart contract package</p>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <Label htmlFor="packageName" className="text-white">
+                    Package Name
+                  </Label>
+                  <Input
+                    id="packageName"
+                    value={formData.packageName}
+                    onChange={(e) => updateFormData("packageName", e.target.value)}
+                    placeholder="my-awesome-contract"
+                    className="bg-slate-800/50 border-slate-600 text-white placeholder:text-slate-400 focus:border-purple-500"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="version" className="text-white">
+                    Version
+                  </Label>
+                  <Input
+                    id="version"
+                    value={formData.version}
+                    onChange={(e) => updateFormData("version", e.target.value)}
+                    placeholder="1.0.0"
+                    className="bg-slate-800/50 border-slate-600 text-white placeholder:text-slate-400 focus:border-purple-500"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="contractAddress" className="text-white">
+                    Contract Address <span className="text-slate-400 text-sm">(optional)</span>
+                  </Label>
+                  <Input
+                    id="contractAddress"
+                    value={formData.contractAddress}
+                    onChange={(e) => updateFormData("contractAddress", e.target.value)}
+                    placeholder="0x742d35Cc6634C0532925a3b8D4C9db96590b5b8c"
+                    className="bg-slate-800/50 border-slate-600 text-white placeholder:text-slate-400 focus:border-purple-500"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="category" className="text-white">
+                    Category <span className="text-slate-400 text-sm">(optional)</span>
+                  </Label>
+                  <Input
+                    id="category"
+                    value={formData.category}
+                    onChange={(e) => updateFormData("category", e.target.value)}
+                    placeholder="DeFi, NFT, Gaming, etc."
+                    className="bg-slate-800/50 border-slate-600 text-white placeholder:text-slate-400 focus:border-purple-500"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="description" className="text-white">
+                  Description <span className="text-slate-400 text-sm">(optional)</span>
+                </Label>
+                <Textarea
+                  id="description"
+                  value={formData.description}
+                  onChange={(e) => updateFormData("description", e.target.value)}
+                  placeholder="Describe what your contract does and how others can use it..."
+                  className="bg-slate-800/50 border-slate-600 text-white placeholder:text-slate-400 focus:border-purple-500 min-h-[100px]"
+                />
+              </div>
+            </div>
+
+            {/* ABI Section */}
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-xl font-semibold text-white mb-2">Contract ABI</h3>
+                <p className="text-slate-400">
+                  Paste your contract's Application Binary Interface (ABI){" "}
+                  <span className="text-slate-400 text-sm">(optional)</span>
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="abi" className="text-white">
+                  ABI JSON
+                </Label>
+                <Textarea
+                  id="abi"
+                  value={formData.abi}
+                  onChange={(e) => updateFormData("abi", e.target.value)}
+                  placeholder='[{"inputs":[],"name":"myFunction","outputs":[{"internalType":"string","name":"","type":"string"}],"stateMutability":"pure","type":"function"}]'
+                  className="bg-slate-800/50 border-slate-600 text-white placeholder:text-slate-400 font-mono text-sm min-h-[200px]"
+                />
+              </div>
+            </div>
+
+            {/* Metadata Upload */}
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-xl font-semibold text-white mb-2">Package Metadata</h3>
+                <p className="text-slate-400">
+                  Upload additional files like documentation, examples, or assets{" "}
+                  <span className="text-slate-400 text-sm">(optional)</span>
+                </p>
+              </div>
+
+              <FileUpload
+                onFileSelect={(file) => updateFormData("metadata", file)}
+                acceptedTypes=".md,.txt,.json,.pdf"
+                maxSize={10 * 1024 * 1024} // 10MB
+              />
+            </div>
+
+            {/* Tags */}
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-xl font-semibold text-white mb-2">Tags</h3>
+                <p className="text-slate-400">
+                  Add tags to help others discover your package{" "}
+                  <span className="text-slate-400 text-sm">(optional)</span>
+                </p>
+              </div>
+
+              <div className="flex gap-2">
+                <Input
+                  value={newTag}
+                  onChange={(e) => setNewTag(e.target.value)}
+                  placeholder="Add a tag..."
+                  className="bg-slate-800/50 border-slate-600 text-white placeholder:text-slate-400 focus:border-purple-500"
+                  onKeyPress={(e) => e.key === "Enter" && addTag()}
+                />
+                <Button
+                  onClick={addTag}
+                  variant="outline"
+                  className="border-purple-500/30 text-purple-300 hover:bg-purple-500/10 bg-transparent"
+                >
+                  Add Tag
+                </Button>
+              </div>
+
+              {formData.tags.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {formData.tags.map((tag) => (
+                    <Badge
+                      key={tag}
+                      variant="outline"
+                      className="border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10 cursor-pointer"
+                      onClick={() => removeTag(tag)}
+                    >
+                      {tag} ✕
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Publish Button */}
+            <div className="pt-6 border-t border-white/10">
+              <Button
+                onClick={handlePublish}
+                disabled={isPublishing || isWrongNetwork}
+                className="w-full bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-white py-4 text-lg font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isPublishing ? (
+                  <div className="flex items-center gap-3">
+                    <motion.div
+                      animate={{ rotate: 360 }}
+                      transition={{ duration: 1, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
+                      className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full"
+                    />
+                    <span>Publishing Package...</span>
+                  </div>
+                ) : (
+                  <span>Publish Package to Blockchain</span>
+                )}
+              </Button>
+            </div>
+          </div>
+        </Card>
+      </motion.div>
+
+      <SuccessModal
+        isOpen={showSuccess}
+        onClose={() => setShowSuccess(false)}
+        title="Package Published Successfully!"
+        description="Your package has been published on-chain and is now available for others to discover and use."
+        explorerLink={
+          txHash
+            ? chainId === 11155111
+              ? `https://sepolia.etherscan.io/tx/${txHash}`
+              : `https://etherscan.io/tx/${txHash}`
+            : undefined
+        }
+      />
+    </>
+  )
+}
+
+export function PublishPackageForm() {
+  return (
+    <ClientOnly
+      fallback={
+        <div className="space-y-8">
+          <Card className="p-8 bg-black/20 backdrop-blur-sm border-white/10">
+            <div className="space-y-6">
+              <div className="space-y-2">
+                <div className="h-6 bg-slate-700 rounded animate-pulse w-1/3" />
+                <div className="h-4 bg-slate-700 rounded animate-pulse w-2/3" />
+              </div>
+              <div className="grid md:grid-cols-2 gap-6">
+                <div className="h-10 bg-slate-700 rounded animate-pulse" />
+                <div className="h-10 bg-slate-700 rounded animate-pulse" />
+              </div>
+              <div className="h-24 bg-slate-700 rounded animate-pulse" />
+            </div>
+          </Card>
+        </div>
+      }
+    >
+      <PublishPackageFormInner />
+    </ClientOnly>
+  )
+}
