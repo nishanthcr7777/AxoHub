@@ -12,149 +12,116 @@ import { AuditReport } from "@/lib/nullshot/types"
 import { useToast } from "@/hooks/use-toast"
 
 export function CodeGeneratorStandalone() {
-    const [code, setCode] = useState(`// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-
-contract VulnerableBank {
-    mapping(address => uint) public balances;
-
-    function deposit() public payable {
-        balances[msg.sender] += msg.value;
-    }
-
-    function withdraw(uint _amount) public {
-        require(balances[msg.sender] >= _amount);
-        (bool sent, ) = msg.sender.call{value: _amount}("");
-        require(sent, "Failed to send Ether");
-        balances[msg.sender] -= _amount;
-    }
-}`)
-    const [isAuditing, setIsAuditing] = useState(false)
-    const [auditReport, setAuditReport] = useState<AuditReport | null>(null)
-    const [step, setStep] = useState<"input" | "audit" | "fix">("input")
+    const [prompt, setPrompt] = useState("")
+    const [generatedCode, setGeneratedCode] = useState("")
+    const [explanation, setExplanation] = useState("")
+    const [isGenerating, setIsGenerating] = useState(false)
     const { toast } = useToast()
 
-    const handleAudit = async () => {
-        console.log("Starting audit for code:", code.slice(0, 50) + "...")
-        if (!code.trim()) {
-            toast({ title: "Code required", description: "Please enter some code to analyze.", variant: "destructive" })
+    const handleGenerate = async () => {
+        if (!prompt.trim()) {
+            toast({ title: "Prompt required", description: "Please describe what you want to build.", variant: "destructive" })
             return
         }
 
-        setIsAuditing(true)
-        setAuditReport(null) // Reset previous report
+        setIsGenerating(true)
+        setGeneratedCode("")
+        setExplanation("")
 
         try {
-            const response = await fetch("/api/audit", {
+            const response = await fetch("/api/generate", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ code }),
+                body: JSON.stringify({ prompt }),
             })
-            const report = await response.json()
-            if (report.error) throw new Error(report.error)
+            const result = await response.json()
+            if (result.error) throw new Error(result.error)
 
-            setAuditReport(report)
-            setStep("audit")
+            setGeneratedCode(result.code)
+            setExplanation(result.explanation)
+            toast({ title: "Code Generated", description: "Your smart contract is ready." })
         } catch (error: any) {
-            toast({ title: "Audit Failed", description: error.message, variant: "destructive" })
+            toast({ title: "Generation Failed", description: error.message, variant: "destructive" })
         } finally {
-            setIsAuditing(false)
+            setIsGenerating(false)
         }
-    }
-
-    const reset = () => {
-        setStep("input")
-        setAuditReport(null)
     }
 
     return (
         <div className="space-y-8">
-            <AnimatePresence mode="wait">
-                {step === "input" && (
-                    <motion.div
-                        key="input"
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, x: -20 }}
-                        className="space-y-6"
-                    >
-                        <div className="flex items-center justify-between">
-                            <h2 className="text-xl font-semibold text-white">Input Source Code</h2>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Input Section */}
+                <motion.div
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    className="space-y-6"
+                >
+                    <Card className="p-6 bg-black/20 border-white/10 h-full flex flex-col">
+                        <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+                            <Shield className="w-5 h-5 text-purple-400" />
+                            Describe your Contract
+                        </h2>
+                        <textarea
+                            value={prompt}
+                            onChange={(e) => setPrompt(e.target.value)}
+                            placeholder="e.g., Create an ERC20 token named 'AxoToken' with a supply of 1 million, mintable by the owner, and burnable by anyone."
+                            className="flex-1 bg-slate-900/50 border border-slate-600 rounded-md p-4 text-white placeholder:text-slate-500 resize-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 transition-all"
+                        />
+                        <div className="mt-6 flex justify-end">
                             <Button
-                                onClick={handleAudit}
-                                disabled={isAuditing || !code.trim()}
-                                className="bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-white"
+                                onClick={handleGenerate}
+                                disabled={isGenerating || !prompt.trim()}
+                                className="bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-white w-full sm:w-auto"
                             >
-                                {isAuditing ? (
+                                {isGenerating ? (
                                     <>
                                         <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                                        Analyzing...
+                                        Generating...
                                     </>
                                 ) : (
                                     <>
                                         <Play className="w-4 h-4 mr-2" />
-                                        Run Security Audit
+                                        Generate Code
                                     </>
                                 )}
                             </Button>
                         </div>
+                    </Card>
+                </motion.div>
 
-                        <Card className="p-6 bg-black/20 border-white/10">
+                {/* Output Section */}
+                <motion.div
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    className="space-y-6"
+                >
+                    <Card className="p-6 bg-black/20 border-white/10 h-full flex flex-col">
+                        <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+                            <Shield className="w-5 h-5 text-cyan-400" />
+                            Generated Code
+                        </h2>
+                        <div className="flex-1 min-h-[500px]">
                             <CodeEditor
-                                value={code}
-                                onChange={setCode}
+                                value={generatedCode}
+                                onChange={setGeneratedCode}
                                 language="solidity"
-                                placeholder="// Paste your smart contract code here..."
+                                placeholder="// Generated code will appear here..."
+                                readOnly={false} // Allow user to edit after generation
                             />
-                        </Card>
-                    </motion.div>
-                )}
-
-                {step === "audit" && auditReport && (
-                    <motion.div
-                        key="audit"
-                        initial={{ opacity: 0, x: 20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0, x: -20 }}
-                        className="space-y-6"
-                    >
-                        <div className="flex items-center justify-between mb-4">
-                            <Button variant="ghost" onClick={reset} className="text-slate-400 hover:text-white">
-                                ← New Audit
-                            </Button>
                         </div>
-
-                        <AuditorReview
-                            report={auditReport}
-                            isLoading={false}
-                            onProceed={() => {
-                                toast({ title: "Audit Approved", description: "Code is safe to use." })
-                            }}
-                            onFix={() => setStep("fix")}
-                        />
-                    </motion.div>
-                )}
-
-                {step === "fix" && auditReport && (
-                    <motion.div
-                        key="fix"
-                        initial={{ opacity: 0, x: 20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0, x: -20 }}
-                    >
-                        <CodeGeneratorPage
-                            code={code}
-                            report={auditReport}
-                            onBack={() => setStep("audit")}
-                            onApplyFix={(newCode) => {
-                                setCode(newCode)
-                                setStep("input") // Go back to input with new code to re-audit
-                                toast({ title: "Fix Applied", description: "Code updated. Please re-run audit to verify." })
-                            }}
-                        />
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                        {explanation && (
+                            <motion.div
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className="mt-4 p-4 bg-purple-500/10 border border-purple-500/20 rounded-lg"
+                            >
+                                <h3 className="text-sm font-semibold text-purple-300 mb-1">AI Explanation</h3>
+                                <p className="text-sm text-slate-300">{explanation}</p>
+                            </motion.div>
+                        )}
+                    </Card>
+                </motion.div>
+            </div>
         </div>
     )
 }

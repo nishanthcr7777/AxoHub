@@ -96,4 +96,40 @@ export class OpenAIService {
             throw error
         }
     }
+
+    static async generateCode(prompt: string): Promise<{ code: string; explanation: string }> {
+        const systemPrompt = `
+      You are an expert smart contract developer. Write a robust, secure, and gas-optimized Solidity smart contract based on the user's request.
+      
+      Return a JSON object with the following structure:
+      {
+        "code": "The complete Solidity code, including SPDX license and pragma",
+        "explanation": "Brief explanation of the contract's functionality and key features"
+      }
+    `
+
+        try {
+            const completion = await openai.chat.completions.create({
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: prompt },
+                ],
+                model: "gpt-4-turbo-preview",
+                response_format: { type: "json_object" },
+            })
+
+            const content = completion.choices[0].message.content
+            if (!content) throw new Error("No content returned from OpenAI")
+
+            const result = JSON.parse(content)
+
+            return {
+                code: result.code,
+                explanation: result.explanation,
+            }
+        } catch (error) {
+            console.error("OpenAI Code Generation Error:", error)
+            throw error
+        }
+    }
 }
