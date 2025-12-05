@@ -1,11 +1,11 @@
-import { OpenAIService } from "@/lib/openai/service"
+import { GeminiService } from "@/lib/gemini/service"
 import { AuditReport, FixSuggestion, Vulnerability, AgentResponse } from "./types"
 
 export class AuditorAgent {
     async audit(code: string): Promise<AgentResponse> {
         try {
             console.log("AuditorAgent: Starting audit...")
-            const report = await OpenAIService.analyzeCode(code)
+            const report = await GeminiService.analyzeCode(code)
             console.log("AuditorAgent: Audit complete.", report)
             return { success: true, data: report }
         } catch (error: any) {
@@ -19,7 +19,7 @@ export class CodeGeneratorAgent {
     async fix(code: string, vulnerability: Vulnerability): Promise<AgentResponse> {
         try {
             console.log("CodeGeneratorAgent: Generating fix for", vulnerability.id)
-            const suggestion = await OpenAIService.generateFix(code, vulnerability)
+            const suggestion = await GeminiService.generateFix(code, vulnerability)
             console.log("CodeGeneratorAgent: Fix generated.")
             return { success: true, data: suggestion }
         } catch (error: any) {

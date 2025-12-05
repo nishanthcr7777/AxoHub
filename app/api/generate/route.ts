@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { OpenAIService } from "@/lib/openai/service"
+import { GeminiService } from "@/lib/gemini/service"
 
 export async function POST(req: Request) {
     try {
@@ -8,7 +8,7 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "Prompt is required" }, { status: 400 })
         }
 
-        const result = await OpenAIService.generateCode(prompt)
+        const result = await GeminiService.generateCode(prompt)
         return NextResponse.json(result)
     } catch (error: any) {
         console.error("Generate Code API Error:", error)
