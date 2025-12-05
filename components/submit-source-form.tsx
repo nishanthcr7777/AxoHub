@@ -19,13 +19,17 @@ import { useToast } from "@/hooks/use-toast"
 import { writeContract, waitForTransactionReceipt } from "wagmi/actions"
 import { ClientOnly } from "@/components/client-only"
 import { ipfsMock } from "@/lib/ipfs-mock"
+import { AuditorReview } from "@/components/auditor-review"
+import { CodeGeneratorPage } from "@/components/code-generator-page"
+import { AuditReport } from "@/lib/nullshot/types"
 
 const steps = [
   { id: 1, title: "Contract Details", description: "Basic information about your contract" },
   { id: 2, title: "Version & Compiler", description: "Specify version and compiler settings" },
   { id: 3, title: "License", description: "Choose your contract license" },
   { id: 4, title: "Source Code", description: "Upload your contract source code" },
-  { id: 5, title: "Review & Submit", description: "Review and submit to blockchain" },
+  { id: 5, title: "Auditor Review", description: "AI-powered security audit" },
+  { id: 6, title: "Review & Submit", description: "Review and submit to blockchain" },
 ]
 
 const compilers = ["solc-0.8.19", "solc-0.8.18", "solc-0.8.17", "solc-0.8.16", "solc-0.8.15"]
@@ -47,10 +51,39 @@ function SubmitSourceFormInner() {
   const { toast } = useToast()
   const [txHash, setTxHash] = useState<`0x${string}` | null>(null)
 
+  // Nullshot MCP State
+  const [auditReport, setAuditReport] = useState<AuditReport | null>(null)
+  const [isAuditing, setIsAuditing] = useState(false)
+  const [showCodeGenerator, setShowCodeGenerator] = useState(false)
+
   const progress = (currentStep / steps.length) * 100
 
-  const handleNext = () => {
-    if (currentStep < steps.length) {
+  const handleNext = async () => {
+    if (currentStep === 4) {
+      // Trigger Audit when moving from Source Code to Auditor Review
+      if (!formData.sourceCode.trim()) {
+        toast({ title: "Source code required", description: "Please enter source code to proceed.", variant: "destructive" })
+        return
+      }
+      setIsAuditing(true)
+      setCurrentStep(currentStep + 1)
+      try {
+        const response = await fetch("/api/audit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: formData.sourceCode }),
+        })
+        const report = await response.json()
+        if (report.error) throw new Error(report.error)
+        setAuditReport(report)
+      } catch (error: any) {
+        toast({ title: "Audit Failed", description: error.message, variant: "destructive" })
+        // Go back to edit if audit fails technically
+        setCurrentStep(4)
+      } finally {
+        setIsAuditing(false)
+      }
+    } else if (currentStep < steps.length) {
       setCurrentStep(currentStep + 1)
     }
   }
@@ -157,6 +190,25 @@ function SubmitSourceFormInner() {
     setFormData((prev) => ({ ...prev, [field]: value }))
   }
 
+  if (showCodeGenerator && auditReport) {
+    return (
+      <CodeGeneratorPage
+        code={formData.sourceCode}
+        report={auditReport}
+        onBack={() => setShowCodeGenerator(false)}
+        onApplyFix={(newCode) => {
+          updateFormData("sourceCode", newCode)
+          setShowCodeGenerator(false)
+          // Re-trigger audit automatically or let user do it?
+          // For now, let's reset audit report so they have to re-verify
+          setAuditReport(null)
+          setCurrentStep(4) // Go back to source code step to review changes
+          toast({ title: "Fix Applied", description: "Code updated. Please review and proceed to audit again." })
+        }}
+      />
+    )
+  }
+
   return (
     <>
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
@@ -168,20 +220,18 @@ function SubmitSourceFormInner() {
           {steps.map((step, index) => (
             <div key={step.id} className="flex items-center">
               <motion.div
-                className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold transition-all duration-300 ${
-                  step.id <= currentStep
+                className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold transition-all duration-300 ${step.id <= currentStep
                     ? "bg-gradient-to-r from-purple-500 to-cyan-500 text-white shadow-lg shadow-purple-500/25"
                     : "bg-slate-700 text-slate-400 border border-slate-600"
-                }`}
+                  }`}
                 whileHover={{ scale: 1.05 }}
               >
                 {step.id < currentStep ? "✓" : step.id}
               </motion.div>
               {index < steps.length - 1 && (
                 <div
-                  className={`w-16 h-0.5 mx-2 transition-all duration-300 ${
-                    step.id < currentStep ? "bg-gradient-to-r from-purple-500 to-cyan-500" : "bg-slate-700"
-                  }`}
+                  className={`w-16 h-0.5 mx-2 transition-all duration-300 ${step.id < currentStep ? "bg-gradient-to-r from-purple-500 to-cyan-500" : "bg-slate-700"
+                    }`}
                 />
               )}
             </div>
@@ -305,6 +355,15 @@ function SubmitSourceFormInner() {
                 )}
 
                 {currentStep === 5 && (
+                  <AuditorReview
+                    report={auditReport}
+                    isLoading={isAuditing}
+                    onProceed={handleNext}
+                    onFix={() => setShowCodeGenerator(true)}
+                  />
+                )}
+
+                {currentStep === 6 && (
                   <div className="space-y-6">
                     <div className="grid md:grid-cols-2 gap-6">
                       <div className="space-y-4">
@@ -349,23 +408,25 @@ function SubmitSourceFormInner() {
 
           {/* Navigation buttons */}
           <div className="flex justify-between mt-8">
-            <Button
-              onClick={handlePrev}
-              disabled={currentStep === 1}
-              variant="outline"
-              className="border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50 bg-transparent"
-            >
-              Previous
-            </Button>
+            {currentStep !== 5 && ( // Hide default buttons on Auditor step, let AuditorReview handle it
+              <Button
+                onClick={handlePrev}
+                disabled={currentStep === 1}
+                variant="outline"
+                className="border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50 bg-transparent"
+              >
+                Previous
+              </Button>
+            )}
 
-            {currentStep < steps.length ? (
+            {currentStep < steps.length && currentStep !== 5 ? (
               <Button
                 onClick={handleNext}
                 className="bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-white"
               >
-                Next Step
+                {currentStep === 4 ? "Analyze & Review" : "Next Step"}
               </Button>
-            ) : (
+            ) : currentStep === 6 ? (
               <Button
                 onClick={handleSubmit}
                 disabled={isSubmitting || isWrongNetwork}
@@ -381,7 +442,7 @@ function SubmitSourceFormInner() {
                   "Submit to Blockchain"
                 )}
               </Button>
-            )}
+            ) : null}
           </div>
         </Card>
       </motion.div>
@@ -410,10 +471,10 @@ export function SubmitSourceForm() {
         <div className="space-y-8">
           <div className="h-2 bg-slate-700 rounded-full animate-pulse" />
           <div className="flex justify-between items-center">
-            {[1, 2, 3, 4, 5].map((step) => (
+            {[1, 2, 3, 4, 5, 6].map((step) => (
               <div key={step} className="flex items-center">
                 <div className="w-10 h-10 rounded-full bg-slate-700 animate-pulse" />
-                {step < 5 && <div className="w-16 h-0.5 mx-2 bg-slate-700" />}
+                {step < 6 && <div className="w-16 h-0.5 mx-2 bg-slate-700" />}
               </div>
             ))}
           </div>

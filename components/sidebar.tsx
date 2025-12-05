@@ -12,6 +12,7 @@ const menuItems = [
   { href: "/publish-package", label: "Publish Package", icon: "📦" },
   { href: "/browse-sources", label: "Browse Sources", icon: "🔍" },
   { href: "/browse-packages", label: "Browse Packages", icon: "🔗" },
+  { href: "/code-generator", label: "Code Generator", icon: "🛡️" },
   { href: "/profile", label: "Profile", icon: "👤" },
 ]
 
